@@ -57,7 +57,7 @@ for ii=1:nCur
     VrefROIVec(VrefROIVec==0)=NaN;
     
     Uvec{ii}=UrefROIVec;
-    Vvec{ii}=UrefROIVec;
+    Vvec{ii}=VrefROIVec; % fixed: use Vref, not Uref
     % current points
     Points{ii}=[Pref(:,1)+UrefROIVec,Pref(:,2)+VrefROIVec];
     
@@ -69,7 +69,6 @@ for ii=1:nCur
         IMrefSmallMasked(~ROI_DIC{1})=[];
         ColorRef=IMrefSmallMasked(:);
     end
-    
 end
 
 % Create triangulation
@@ -93,7 +92,6 @@ CF=mean(ColorRef(F),2);
 
 end
 
- 
 %% 
 % MultiDIC: a MATLAB Toolbox for Multi-View 3D Digital Image Correlation
 % 
