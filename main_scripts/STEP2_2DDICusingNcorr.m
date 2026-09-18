@@ -6,10 +6,11 @@
 % consistent. The 1st image from the 1st camera is always defined as the reference
 % image.
 %
-% High-strain mode:
-%   OFF: keep original behavior (single Ncorr run on the concatenated image set)
-%   ON : separate camera 1 / camera 2 temporal analyses, and a final cross-camera
-%        reference analysis to map camera 2 onto camera 1 reference ordering.
+% High-Strain / Step Analysis:
+%   OFF: keep the original logic (single Ncorr call using the concatenated image set)
+%   ON : use the original MultiDIC reference logic but split analyses by camera.
+%        The key point is that BOTH camera sequences use the same reference image,
+%        C1_1, so the point ordering remains compatible with STEP 3.
 
 clearvars; close all; clc;
 
@@ -59,13 +60,13 @@ end
 
 %% ask whether to use the separated-camera high-strain workflow
 highStrainPrompt = questdlg('Enable High-Strain / Step Analysis with camera-separated processing?', ...
-    'High-Strain mode', 'No (legacy)', 'Yes (camera-separated)', 'No (legacy)');
+    'High-Strain mode', 'No (legacy)', 'Yes (common reference)', 'No (legacy)');
 
-highStrainMode = strcmp(highStrainPrompt,'Yes (camera-separated)');
+highStrainMode = strcmp(highStrainPrompt,'Yes (common reference)');
 DIC2DpairResults.highStrainMode = highStrainMode;
 
 if highStrainMode
-    DIC2DpairResults.highStrainMap.mode = 'camera_separated';
+    DIC2DpairResults.highStrainMap.mode = 'camera_separated_common_reference';
 else
     DIC2DpairResults.highStrainMap.mode = 'legacy_single_ncorr';
 end
@@ -79,9 +80,7 @@ pause
 % NCorr software (too small). It also allows the assistance of SIFT
 % matches (it helps locating the overlapping region, but is time costly)
 set(0, 'DefaultUIControlFontSize', 10);
-chooseMaskButton = questdlg('Create new mask for correlation, use saved mask, or use Ncorr to draw mask?', ...
-    'mask options?', 'New', 'Saved','Ncorr', 'New'); % existing mask should be in savePath
-
+chooseMaskButton = questdlg('Create new mask for correlation, use saved mask, or use Ncorr to draw mask?', 'mask options?', 'New', 'Saved','Ncorr', 'New'); % existing mask should be in savePath
 switch chooseMaskButton
     case 'New'
         nROI=1;
@@ -107,24 +106,14 @@ switch chooseMaskButton
 end
 
 if highStrainMode
-    % Camera 2 needs a separate ROI in its own coordinate system when run individually.
-    % Do not silently reuse the camera-1 mask unless the user explicitly chooses it.
-    if strcmp(chooseMaskButton,'Ncorr')
-        % Ncorr will draw the ROI interactively per camera sequence. Leave empty.
-        ROImaskCam2 = [];
+    % In the common-reference High-Strain mode, both camera analyses use the same
+    % reference image C1_1 and the same ROI. This keeps the point ordering
+    % consistent with the original MultiDIC design and with STEP 3.
+    if ~strcmp(chooseMaskButton,'Ncorr')
+        DIC2DpairResults.highStrainMap.commonROI = ROImask;
     else
-        % Prompt user to select camera-2 ROI for independent analysis.
-        % This is a conservative choice; it avoids mixing camera-1 and camera-2 masks.
-        answerROI2 = questdlg('Select a camera-2 ROI for independent high-strain analysis?', ...
-            'Camera-2 ROI', 'Use same mask as camera 1', 'Select new ROI', 'Use same mask as camera 1');
-        switch answerROI2
-            case 'Use same mask as camera 1'
-                ROImaskCam2 = ROImask;
-            case 'Select new ROI'
-                ROImaskCam2 = selectROI(ImSet{DIC2DpairResults.nImages+1},1);
-        end
+        DIC2DpairResults.highStrainMap.commonROI = [];
     end
-    DIC2DpairResults.highStrainMap.camera2ROI = ROImaskCam2;
 end
 
 h=msgbox({'Please wait while initializing Ncorr'; ''; 'Press enter in the command window when'; 'Ncorr analysis is finished (without closing Ncorr)'});
@@ -142,7 +131,6 @@ if ~highStrainMode
     disp('Press enter in the command window when Ncorr analysis is finished (without closing Ncorr)');
     pause
 
-    %% Extract results from Ncorr and calculate correlated image points, correlation coefficients, faces and face colors
     [Points,CorCoeffVec,F,CF] = extractNcorrResults(handles_ncorr,ImSet{1});
     DIC2DpairResults.ncorrInfo=handles_ncorr.data_dic.dispinfo;
     DIC2DpairResults.Points=Points;
@@ -153,7 +141,6 @@ if ~highStrainMode
         DIC2DpairResults.ROImask=handles_ncorr.reference.roi.mask;
     end
 
-    %% plot?
     set(0, 'DefaultUIControlFontSize', 10);
     plotButton = questdlg('Plot correlated points on images?', 'Plot?', 'Yes', 'No', 'Yes');
     switch plotButton
@@ -162,41 +149,33 @@ if ~highStrainMode
         case 'No'
     end
 else
-    %% High-strain separated-camera workflow
-    % 1) split image sets by camera
+    % common-reference High-Strain path.
+    % The key is that both camera sequences use the same reference image, C1_1.
+    % This preserves the original MultiDIC point ordering and keeps STEP 3 valid.
     [ImSet1,ImSet2,ImPaths1,ImPaths2] = splitDICimageSetByCamera(ImSet,ImPaths,DIC2DpairResults.nImages);
     DIC2DpairResults.highStrainMap.ImPaths1 = ImPaths1;
     DIC2DpairResults.highStrainMap.ImPaths2 = ImPaths2;
 
-    % 2) camera 1 temporal DIC
-    resultCam1 = runSingleCameraNcorr(ImSet1,ImSet1{1},ROImask,true);
+    % camera 1 temporal analysis
+    resultCam1 = runSingleCameraNcorr(ImSet1,ImSet{1},ROImask,~strcmp(chooseMaskButton,'Ncorr'));
     DIC2DpairResults.highStrainMap.cam1 = resultCam1;
 
-    % 3) camera 2 temporal DIC
-    if isempty(ROImaskCam2)
-        error('Camera 2 ROI is required for a valid high-strain separated-camera analysis.');
-    end
-    resultCam2 = runSingleCameraNcorr(ImSet2,ImSet2{1},ROImaskCam2,true);
+    % camera 2 temporal analysis using the same C1_1 reference image
+    resultCam2 = runSingleCameraNcorr(ImSet2,ImSet{1},ROImask,~strcmp(chooseMaskButton,'Ncorr'));
     DIC2DpairResults.highStrainMap.cam2 = resultCam2;
 
-    % 4) cross-camera reference analysis: C1_1 -> C2_1
-    crossResult = runCrossCameraReferenceDIC(ImSet{1},ImSet{DIC2DpairResults.nImages+1},ROImask,[]);
-    DIC2DpairResults.highStrainMap.crossCamera = crossResult;
+    % validate that the two analyses share a common reference grid and face topology
+    if size(resultCam1.Points{1},1) ~= size(resultCam2.Points{1},1)
+        error('STEP2 high-strain mode: Camera 1 and Camera 2 reference point counts differ. The common-reference workflow requires identical reference-grid size.');
+    end
+    if size(resultCam1.Faces,1) ~= size(resultCam2.Faces,1)
+        error('STEP2 high-strain mode: Camera 1 and Camera 2 reference face topology differs.');
+    end
 
-    % 5) map camera-2 temporal results to the camera-1 reference grid using the cross-camera result
-    mapping = @(resCam2,resCam1) mapCamera2ToCamera1Reference(resCam2,resCam1);
-    resultCam2Mapped = mapping(resultCam2, crossResult);
-    DIC2DpairResults.highStrainMap.map = resultCam2Mapped;
-
-    % 6) build the legacy structure for STEP 3
-    DIC2DpairResults = buildCompatibleDIC2DpairResults(DIC2DpairResults, ...
-        resultCam1, resultCam2Mapped, ...
-        nCamRef, nCamDef, ImPaths, DIC2DpairResults.nImages, []);
-
-    % 7) save the separated analysis provenance info
-    DIC2DpairResults.highStrainMap.referenceTimePair = struct('cam1',1,'cam2',1);
-    DIC2DpairResults.highStrainMap.imageIndex = struct('cam1', (1:DIC2DpairResults.nImages).', ...
-                                                      'cam2', (1:DIC2DpairResults.nImages).');
+    DIC2DpairResults = buildCompatibleDIC2DpairResults(DIC2DpairResults,resultCam1,resultCam2,nCamRef,nCamDef,ImPaths,DIC2DpairResults.nImages,[]);
+    DIC2DpairResults.highStrainMap.referenceImage = ImSet{1};
+    DIC2DpairResults.highStrainMap.referenceTimeIndex = 1;
+    DIC2DpairResults.highStrainMap.imageIndex = struct('cam1',(1:DIC2DpairResults.nImages).','cam2',(1:DIC2DpairResults.nImages).');
 end
 
 %% save important variables for further analysis (write text files of correlated 2D points, their cirrelation coefficients, triangular faces, and face colors

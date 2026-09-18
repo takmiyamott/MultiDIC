@@ -1,38 +1,39 @@
 function DIC2DpairResults = buildCompatibleDIC2DpairResults(DIC2DpairResults,resultCam1,resultCam2, ...
                                                             nCamRef,nCamDef,ImPaths,nImages, camera2Mapping)
-%% Build a STEP-2 result structure compatible with later stereo reconstruction.
-% This function preserves the public interface of DIC2DpairResults while reindexing
-% camera 2 results onto the Camera 1 reference-grid ordering.
+%% Assemble two common-reference analyses in the original MultiDIC layout.
 %
-% Inputs:
-%   DIC2DpairResults : current struct
-%   resultCam1       : output of runSingleCameraNcorr on camera 1
-%   resultCam2       : output of mapCamera2ToCamera1Reference on camera 2
-%   nCamRef          : reference camera index
-%   nCamDef          : deformed camera index
-%   ImPaths          : original image paths in the legacy order
-%   nImages          : number of time frames per camera
-%   camera2Mapping   : optional mapping function (currently ignored if provided;
-%                      the mapping must already have been applied to resultCam2)
-%
-% Output:
-%   DIC2DpairResults : updated struct
+% Both resultCam1 and resultCam2 are produced from the same reference image, C1_1,
+% so they share the same point ordering and face topology. No extra camera-to-camera
+% mapping or interpolation is required.
 
-if nargin < 8 || isempty(camera2Mapping)
-    % The mapping is assumed to have been performed already in resultCam2.
-    % We intentionally do not silently accept a same-order fallback.
+if nargin >= 9 && ~isempty(camera2Mapping)
+    warning('buildCompatibleDIC2DpairResults:UnusedMapping', ...
+            'In the common-reference workflow, camera2Mapping is ignored because both analyses use the same reference image.');
 end
 
 if numel(resultCam1.Points) ~= nImages || numel(resultCam2.Points) ~= nImages
     error('buildCompatibleDIC2DpairResults:InvalidFrameCount', ...
-          'Camera 1 and Camera 2 temporal results must contain the same number of time frames.');
+          'Both camera analyses must contain nImages frames.');
 end
 
 for ii = 1:nImages
     if size(resultCam1.Points{ii},1) ~= size(resultCam2.Points{ii},1)
         error('buildCompatibleDIC2DpairResults:IncompatiblePointCount', ...
-              ['Camera 1 and Camera 2 results do not share the same point ordering for frame ' num2str(ii) '.']);
+              ['The two camera analyses do not share the same point count at frame ' num2str(ii) '.']);
     end
+    if size(resultCam1.CorCoeffVec{ii},1) ~= size(resultCam1.Points{ii},1)
+        error('buildCompatibleDIC2DpairResults:MalformedCamera1Correlations', ...
+              ['Camera 1 correlation vector size does not match point count at frame ' num2str(ii) '.']);
+    end
+    if size(resultCam2.CorCoeffVec{ii},1) ~= size(resultCam2.Points{ii},1)
+        error('buildCompatibleDIC2DpairResults:MalformedCamera2Correlations', ...
+              ['Camera 2 correlation vector size does not match point count at frame ' num2str(ii) '.']);
+    end
+end
+
+if size(resultCam1.Faces,1) ~= size(resultCam2.Faces,1)
+    error('buildCompatibleDIC2DpairResults:IncompatibleFaceTopology', ...
+          'The two camera analyses do not share the same reference face topology.');
 end
 
 DIC2DpairResults.nCamRef = nCamRef;
@@ -50,5 +51,7 @@ if ~isfield(DIC2DpairResults,'ncorrInfo') || isempty(DIC2DpairResults.ncorrInfo)
 end
 DIC2DpairResults.ncorrInfo.cam1 = resultCam1.ncorrInfo;
 DIC2DpairResults.ncorrInfo.cam2 = resultCam2.ncorrInfo;
+DIC2DpairResults.highStrainMap.mappingMethod = 'common_reference_camera1';
+DIC2DpairResults.highStrainMap.mappingRequired = false;
 
 end
