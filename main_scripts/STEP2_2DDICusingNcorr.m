@@ -10,7 +10,10 @@
 %   OFF: keep the original logic (single Ncorr call using the concatenated image set)
 %   ON : use the original MultiDIC reference logic but split analyses by camera.
 %        The key point is that BOTH camera sequences use the same reference image,
-%        C1_1, so the point ordering remains compatible with STEP 3.
+%        C1_1, so the point ordering remains compatible with STEP 3. Camera 1 and
+%        Camera 2 analyses MUST use the identical reference ROI mask; when the user
+%        chooses to draw the ROI inside the Ncorr GUI, we run Camera 1 first, capture
+%        the resulting mask, and reuse it (non-interactively) for Camera 2.
 
 clearvars; close all; clc;
 
@@ -79,6 +82,11 @@ pause
 % This is a GUI for choosing the ROI instead of choosing the ROI in the
 % NCorr software (too small). It also allows the assistance of SIFT
 % matches (it helps locating the overlapping region, but is time costly)
+% NOTE: ROImask is only assigned here for 'New' and 'Saved'. For 'Ncorr',
+% the ROI is drawn interactively inside the Ncorr GUI later, so ROImask
+% must be explicitly initialized to [] to avoid an undefined-variable error.
+ROImask = [];
+
 set(0, 'DefaultUIControlFontSize', 10);
 chooseMaskButton = questdlg('Create new mask for correlation, use saved mask, or use Ncorr to draw mask?', 'mask options?', 'New', 'Saved','Ncorr', 'New'); % existing mask should be in savePath
 switch chooseMaskButton
@@ -103,17 +111,9 @@ switch chooseMaskButton
         load([PathName FileName]);
         DIC2DpairResults.ROImask=ROImask;
     case 'Ncorr'
-end
-
-if highStrainMode
-    % In the common-reference High-Strain mode, both camera analyses use the same
-    % reference image C1_1 and the same ROI. This keeps the point ordering
-    % consistent with the original MultiDIC design and with STEP 3.
-    if ~strcmp(chooseMaskButton,'Ncorr')
-        DIC2DpairResults.highStrainMap.commonROI = ROImask;
-    else
-        DIC2DpairResults.highStrainMap.commonROI = [];
-    end
+        % ROImask stays [] here; it will be drawn interactively inside Ncorr
+        % during the first analysis (legacy path) or during the Camera-1
+        % analysis (high-strain path), then reused as needed.
 end
 
 h=msgbox({'Please wait while initializing Ncorr'; ''; 'Press enter in the command window when'; 'Ncorr analysis is finished (without closing Ncorr)'});
@@ -150,23 +150,42 @@ if ~highStrainMode
     end
 else
     % common-reference High-Strain path.
-    % The key is that both camera sequences use the same reference image, C1_1.
-    % This preserves the original MultiDIC point ordering and keeps STEP 3 valid.
+    % The key is that both camera sequences use the same reference image, C1_1,
+    % AND the identical reference ROI mask. This preserves the original MultiDIC
+    % point ordering and keeps STEP 3 valid.
     [ImSet1,ImSet2,ImPaths1,ImPaths2] = splitDICimageSetByCamera(ImSet,ImPaths,DIC2DpairResults.nImages);
     DIC2DpairResults.highStrainMap.ImPaths1 = ImPaths1;
     DIC2DpairResults.highStrainMap.ImPaths2 = ImPaths2;
 
-    % camera 1 temporal analysis
-    resultCam1 = runSingleCameraNcorr(ImSet1,ImSet{1},ROImask,~strcmp(chooseMaskButton,'Ncorr'));
-    DIC2DpairResults.highStrainMap.cam1 = resultCam1;
+    if strcmp(chooseMaskButton,'Ncorr')
+        % Run Camera 1 first, letting the user draw the ROI interactively inside
+        % Ncorr. Then capture the resulting mask and reuse it verbatim for
+        % Camera 2, so both analyses share an identical reference ROI.
+        disp('High-strain mode with interactive ROI: draw the ROI during the CAMERA 1 analysis. It will be reused automatically for CAMERA 2.');
+        resultCam1 = runSingleCameraNcorr(ImSet1,ImSet{1},[],false);
 
-    % camera 2 temporal analysis using the same C1_1 reference image
-    resultCam2 = runSingleCameraNcorr(ImSet2,ImSet{1},ROImask,~strcmp(chooseMaskButton,'Ncorr'));
+        commonROImask = resultCam1.ROImask;
+        if isempty(commonROImask)
+            error('STEP2 high-strain mode: no ROI was captured from the Camera 1 analysis. A reference ROI is required before running Camera 2.');
+        end
+
+        DIC2DpairResults.highStrainMap.commonROI = commonROImask;
+
+        resultCam2 = runSingleCameraNcorr(ImSet2,ImSet{1},commonROImask,true);
+    else
+        % Programmatic ROI (New or Saved): both analyses use the same mask directly.
+        DIC2DpairResults.highStrainMap.commonROI = ROImask;
+
+        resultCam1 = runSingleCameraNcorr(ImSet1,ImSet{1},ROImask,true);
+        resultCam2 = runSingleCameraNcorr(ImSet2,ImSet{1},ROImask,true);
+    end
+
+    DIC2DpairResults.highStrainMap.cam1 = resultCam1;
     DIC2DpairResults.highStrainMap.cam2 = resultCam2;
 
     % validate that the two analyses share a common reference grid and face topology
     if size(resultCam1.Points{1},1) ~= size(resultCam2.Points{1},1)
-        error('STEP2 high-strain mode: Camera 1 and Camera 2 reference point counts differ. The common-reference workflow requires identical reference-grid size.');
+        error('STEP2 high-strain mode: Camera 1 and Camera 2 reference point counts differ. The common-reference workflow requires an identical reference ROI/grid for both analyses.');
     end
     if size(resultCam1.Faces,1) ~= size(resultCam2.Faces,1)
         error('STEP2 high-strain mode: Camera 1 and Camera 2 reference face topology differs.');
