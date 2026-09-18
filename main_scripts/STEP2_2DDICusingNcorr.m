@@ -180,6 +180,21 @@ else
         resultCam2 = runSingleCameraNcorr(ImSet2,ImSet{1},ROImask,true);
     end
 
+    % Close the Ncorr GUI windows for both camera analyses before storing
+    % results. handles_ncorr (a graphics/handle object) must never be saved
+    % into DIC2DpairResults; MATLAB will otherwise try to serialize the GUI
+    % figure, producing a large and potentially unloadable .mat file.
+    if isfield(resultCam1,'handles_ncorr') && ~isempty(resultCam1.handles_ncorr) ...
+            && isvalid(resultCam1.handles_ncorr.handles_gui.figure)
+        close(resultCam1.handles_ncorr.handles_gui.figure);
+    end
+    if isfield(resultCam2,'handles_ncorr') && ~isempty(resultCam2.handles_ncorr) ...
+            && isvalid(resultCam2.handles_ncorr.handles_gui.figure)
+        close(resultCam2.handles_ncorr.handles_gui.figure);
+    end
+    resultCam1 = rmfield(resultCam1,'handles_ncorr');
+    resultCam2 = rmfield(resultCam2,'handles_ncorr');
+
     DIC2DpairResults.highStrainMap.cam1 = resultCam1;
     DIC2DpairResults.highStrainMap.cam2 = resultCam2;
 
